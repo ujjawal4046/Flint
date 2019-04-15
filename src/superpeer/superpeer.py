@@ -18,20 +18,28 @@ import threading
 import pickle
 from src.classes.message import Message
 
+neighbours=[] #global list of neighbours of the superpeer
+peers=[] #global list of peers held by the superpeer
+
 def bootstrap_recv(data):
-    print(data.getSender())
-    print(data.getMessType())
-    print(data.getMessage())
+    print('message from bootstrap')
+    #print(data.getMessage())
+    if data.getMessType() == '0': 
+        print('>receiving neighbour list')
+        neighbours = pickle.loads(data.getMessage())
+        for neighbour in neighbours:
+            print(neighbour.getIP()+' '+str(neighbour.getPort()))
+    elif data.getMessType() == '1':
+        print('>receiving keep alive acknowledgement')
 
 def superpeer_recv(data):
-    print(data.getSender())
-    print(data.getMessType())
-    print(data.getMessage())
+    print('message from superpeer')
 
 def peer_recv(data):
-    print(data.getSender())
-    print(data.getMessType())
-    print(data.getMessage())
+    print('message from peer')
+    if data.getMessType() == '1':
+        print('>receiving peer request')
+        add_peer(pickle.loads(data.getMessage()))
 
 def listener(port):
     s=socket.socket()
@@ -46,7 +54,6 @@ def listener(port):
             data+=t
             if t==b'':
                 break
-        print('out')
         d_data = pickle.loads(data)
         if d_data.getSender() == '0':
             bootstrap_recv(d_data)
@@ -64,16 +71,40 @@ def send(ip, port, data):
     s.send(pickle.dumps(data))
     s.close()
 
+def add_peer(peer):
+    peers.append(peer)
+
 def add_neighbours():
-    data = Message('1', '1', 'fgdsfgdsfg')
+    data = Message('1', '0', '')
     ip='127.0.0.1' #ip of bootstrap
     port=12300 #port for bootstrap
     t1 = threading.Thread(target=send, args=(ip, port, data))
     t1.start()
     t1.join()
 
+def send_keep_alive():
+    data = Message('1', '1', '')
+    ip='127.0.0.1' #ip of bootstrap
+    port=12300 #port for bootstrap
+    t1 = threading.Thread(target=send, args=(ip, port, data))
+    t1.start()
+    t1.join()
+    t1=threading.Timer(10.0, send_keep_alive)
+    t1.start()
+
+def broadcast(data):
+    for neighbour in neighbours:
+        send(neighbour.getIP(), neighbour.getPort(), data)
+
+def startup():
+    add_neighbours()
+    t1=threading.Timer(10.0, send_keep_alive)
+    t1.start()
+
 if __name__ == "__main__":
+    print('--------Starting Superpeer--------')
     t1 = threading.Thread(target=listener, args=(8081,))
     t1.start()
+    startup()
     t1.join()
     print("Exiting!")
