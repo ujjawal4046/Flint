@@ -23,7 +23,9 @@ class BootstrapManager:
                     line.append('0')
                 self.m_superpeers[(line[0],int(line[1]))] = int(line[2])
     def listen_on(self,ports,interface=''):
-        pass
+        self.m_ports = ports
+        self.m_interface = interface
+        self.open_listen_port()
     def open_listen_port(self):
         self.m_listen_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
         self.m_listen_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
