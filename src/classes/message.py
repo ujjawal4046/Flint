@@ -1,4 +1,7 @@
 
+TYPE_BOOTSTRAP = 2
+TYPE_PEER = 0
+TYPE_SUPERPEER = 1
 
 class Message:
     def __init__(self, sender, mess_type, message):
