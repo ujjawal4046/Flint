@@ -64,6 +64,7 @@ class PeerManager:
             self.m_superpeers.append((ip_addr,port))
         print('[DEBUG] ',self.m_superpeers)
     def handshake(self):
+        #handshake with superpeer sharing its port no 
         packet = struct.pack("!b",TYPE_PEER)
         payload = struct.pack("")
     def close_bootstrap_connection(self):
@@ -105,6 +106,7 @@ class PeerManager:
 if __name__ == '__main__':
     pm = PeerManager('',range(6889,6890))
     pm.get_superpeers()
+    pm.establish_superpeer_connections()
     pm.handshake()
     pm.share_directory()
     

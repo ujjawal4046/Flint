@@ -1,4 +1,3 @@
-import socketserver
 import socket
 import threading
 import struct 
@@ -19,10 +18,26 @@ class SuperpeerManager:
             except:
                 pass
         self.m_neighbours = []
-
-    def get_neighbours(self):
+     def listen_on(self,ports,interface=""):
+         self.m_ports = ports
+         self.m_interface = interface
+         self.open_listen_port()
+     def open_listen_port(self):
+        self.m_listen_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        self.m_listen_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        for port in self.m_ports:
+            try:
+                self.m_listen_socket.bind((self.m_interface,port))
+                self.m_listen_socket.listen(5)
+                print("[DEBUG] Binding on %s:%d"%(self.m_interface,port))
+                break
+            except Exception as e:
+                print(e)
+                traceback.print_exc()
+     def get_neighbours(self):
         packet = struct.pack("!b",TYPE_SUPERPEER)
-        packet = packet + struct.pack("!i",0)
+        #send listening port to bootstrap as part of handshake
+        packet = packet + struct.pack("!i",2) + struct.pack("!H",self.m_liste_socket.getsockname()[1])
         try:
             self.m_bootstrap_socket.sendall(packet)
         except Exception as e:
@@ -37,7 +52,23 @@ class SuperpeerManager:
             port = struct.unpack("!H",recv_packet[idx+4:idx+6])[0]
             self.m_neighbours.append((ip_addr,port))
         print('[DEBUG] ',self.m_neighbours)
-
+     def establish_neighour_connections(self):
+        self.m_neighbour_sockets = []
+        for remote_end in self.m_neighbours:
+            try:
+                ssock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+                ssock.setsockopt(socket.SOL_SOCKET,socket.SO_KEEPALIVE,1)
+                ssock.connect(remote_end)
+                self.m_superpeer_sockets.append(ssock)
+            except Exception as e:
+                print("[ERROR] Remote endpoint",remote_end)
+                print(e)
+                traceback.print_exc()
+     def accept_incoming_connections(self):
+        #Accept incoming connections
+        pass
 if __name__ == '__main__':
     sm = SuperpeerManager('',range(6889,6890))
     sm.get_neighbours()
+    sm.open_listen_port()
+    sm.establish_neighour_connections()
