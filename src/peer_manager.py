@@ -84,25 +84,27 @@ class PeerManager:
         while True:
             try:
                   data = remote.recv(size)
-                  print(data)
                   if not len(data):
                     remote.close()
                     return
                   node_type = struct.unpack('!b',data[0:1])[0]
                   payload_len = struct.unpack("!i",data[1:5])[0]
+                  print("[DEBUG] payload len",payload_len)
                   if node_type == TYPE_PEER:
                           pass
                   elif node_type == TYPE_SUPERPEER:
+                      print("[DEBUG] Remote type was superpeer")
                       message_type = struct.unpack('!b',data[5:6])[0]
                       my_ip = socket.inet_ntoa(data[6:10])
                       response_len = struct.unpack("!i",data[10:14])[0]
                       pos = 14
                       query_choices_files = []
+                      print("[DEBUG] ",message_type,my_ip,response_len)
                       if message_type == M_QUERY_KEY_RESP:
                           for idx in range(response_len):
-                              name_len = struct.unpack("iH",data[pos:pos+2])
+                              name_len = struct.unpack("!H",data[pos:pos+2])[0]
                               pos += 2
-                              file_name = str(data[pos:pos+name_len].decode('ascii'))
+                              file_name = str(data[pos:pos+name_len].decode('utf-8'))
                               print("[DEBUG] got filename for query",file_name)
                               query_choices_files.append(file_name)
                               pos += name_len
@@ -113,27 +115,34 @@ class PeerManager:
                               hosting_port = struct.unpack("!H",data[pos+4:pos+6])[0]
                               print("[DEBUG] got peer for query",hosting_ip,hosting_port)
                               pos += 6
+                          self.m_query = None
                   else:
                       pass
             except Exception as e:
                 print(e)
                 traceback.print_exc()
     def select_from_query_choices(self,query_choices):
-        print("[OUTPUT] Displaying choices for query: ",self.m_query)
-        idx = 1
-        for choice in query_choices:
-            print("[OUTPUT] %d: %s"%(idx,choice))
-            idx += 1
-        try:
-            sidx  = int(input(">[CHOICE]:"))
-        except:
-            sidx = 0
-        if sidx > idx:
-            sidx = 0
-        import hashlib
-        hash_choice = hashlib.md5(query_choices[sidx].encode()).digest()
-        print("[DEBUG] querying for %s with has %s"%(query_choices[sidx],hash_choice))
-        self.send_query(Query(Query.QUERY_ID,hash_choice))
+        if len(query_choices) > 0:
+            self.m_lock.acquire()
+            print("[OUTPUT] Displaying choices for query: ",self.m_query)
+            idx = 1
+            for choice in query_choices:
+                print("[OUTPUT] %d: %s"%(idx,choice))
+                idx += 1
+            try:
+                sidx  = int(input(">[CHOICE]:"))
+            except:
+                sidx = 0
+            if sidx > idx:
+                sidx = 0
+            import hashlib
+            hash_choice = hashlib.md5(query_choices[sidx-1].encode('utf-8')).digest()
+            self.m_lock.release()
+            print("[DEBUG] querying for %s with hash"%(query_choices[sidx-1]),hash_choice)
+            self.send_query(Query(Query.QUERY_ID,hash_choice))
+        else:
+            print("[OUTPUT] No result for query:",self.m_query)
+            self.m_query = None
     def get_superpeers(self):
         packet = struct.pack('!b',TYPE_PEER)
         packet = packet + struct.pack('!i',0)
@@ -191,19 +200,30 @@ class PeerManager:
           packet = struct.pack("!b",TYPE_PEER)
           payload = struct.pack("!b",M_ENTRIES_UPLOAD) + struct.pack("!i",len(table))
           for (lname,name,is_down,block_count) in table:
-              payload = payload + struct.pack("!H",lname) + bytes(name,'ascii') + struct.pack("!b",is_down) + struct.pack("!i",block_count)
+              payload = payload + struct.pack("!H",lname) + bytes(name,'utf-8') + struct.pack("!b",is_down) + struct.pack("!i",block_count)
           packet += struct.pack("!i",len(payload)) + payload
           
           remote_socket.sendall(packet)
     def start_queries(self):
         while True:
-            keyword = input(">[SEARCH]:")
-            self.m_query = keyword
-            self.send_query(Query(Query.QUERY_KEY,keyword))
+            if self.m_query == None:
+                keyword = input(">[SEARCH]:")
+                if len(keyword) <= 3:
+                    print("[DEBUG] Too short a query.")
+                    continue
+                else:
+                    self.m_query = keyword
+                    self.send_query(Query(Query.QUERY_KEY,keyword))
+        
+            
     def send_query(self,query):
           assert query.qid == M_QUERY_KEY or query.qid == M_QUERY_ID, "[ERROR] wrong type of query"
           packet = struct.pack("!b",TYPE_PEER)
-          payload = struct.pack("!b",query.qid) + bytes(query.qstring,'ascii')
+          payload = struct.pack("!b",query.qid) 
+          if query.qid == M_QUERY_KEY:
+              payload += bytes(query.qstring,'utf-8')
+          else:
+              payload += query.qstring
           packet = packet + struct.pack("!i",len(payload)) + payload
           for ssock in self.m_superpeer_sockets:
               try:

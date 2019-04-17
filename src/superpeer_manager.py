@@ -58,9 +58,9 @@ class SuperpeerManager:
             except Exception as e:
                 print(e)
                 traceback.print_exc()
-        threading.Thread(target=self.accept_incoming_connections,args=()).start()
+        
      def get_neighbours(self):
-        self.m_lock.acquire()
+        
         packet = struct.pack("!b",TYPE_SUPERPEER)
         #send listening port to bootstrap as part of handshake
         packet = packet + struct.pack("!i",2) + struct.pack("!H",self.m_listen_socket.getsockname()[1])
@@ -70,6 +70,10 @@ class SuperpeerManager:
             print(e)
             traceback.print_exc()
         recv_packet = self.m_bootstrap_socket.recv(1024)
+        if not len(recv_packet):
+            print("[ERROR] bootstrap not connecting. Exiting now..")
+            self.m_listen_socket.close()
+            sys.exit()
         print("[DEBUG] neighbour recv packet",recv_packet)
         remote_type = struct.unpack('!b',recv_packet[0:1])[0]
         payload_len = struct.unpack('!i',recv_packet[1:5])[0]
@@ -81,7 +85,7 @@ class SuperpeerManager:
         print('[DEBUG] ',self.m_neighbour_sockets)
         self.m_bootstrap_socket.shutdown(socket.SHUT_RDWR)
         self.m_bootstrap_socket.close()
-        self.m_lock.release()
+        threading.Thread(target=self.accept_incoming_connections,args=()).start()
      def establish_neighbour_connections(self):
         for remote_end in self.m_neighbour_sockets.keys():
             try:
@@ -108,6 +112,7 @@ class SuperpeerManager:
             remote,address = self.m_listen_socket.accept()
             print('[DEBUG] came connection from ',address)
             self.check_remote_type(remote,address)
+     
      def check_remote_type(self,remote,address):
          size = 1024*1024
          while True:
@@ -117,23 +122,25 @@ class SuperpeerManager:
                     remote.close()
                     return
                 while len(data) > 0:
-                    
                     node_type = struct.unpack('!b',data[0:1])[0]
                     payload_len = struct.unpack("!i",data[1:5])[0]
                     if node_type == TYPE_PEER:
+                        print("[DEBUG] Remote type was peer")
                         message_type = struct.unpack('!b',data[5:6])[0]
                         peer_id = address[0]
                         if message_type == M_HANDSHAKE:
+                             print("[DEBUG] Handshake message")
                              peer_listen_port = struct.unpack("!H",data[6:8])[0]
                              self.m_peers[peer_id] = peer_listen_port
                              print("[DEBUG] Added peer",peer_id,peer_listen_port)
                         elif message_type == M_ENTRIES_UPLOAD:
+                             print("[DEBUG] Entries upload message")
                              recv_table = []
                              recv_table_len = struct.unpack("!i",data[6:10])[0]
                              data_pos = 10
                              for idx in range(recv_table_len):
                                  file_name_len = struct.unpack("!H",data[data_pos:data_pos+2])[0]
-                                 file_name = str(data[data_pos+2:data_pos+2+file_name_len].decode('ascii'))
+                                 file_name = str(data[data_pos+2:data_pos+2+file_name_len].decode('utf-8'))
                                  data_pos += 2+file_name_len
                                  is_down = (struct.unpack("!b",data[data_pos:data_pos+1])[0] == 1)
                                  block_count = struct.unpack("!i",data[data_pos+1:data_pos+5])
@@ -142,17 +149,18 @@ class SuperpeerManager:
                                  recv_table.append((file_name,is_down,block_count))
                              self.update_entries(peer_id,recv_table)
                         elif message_type == M_QUERY_KEY or M_QUERY_ID:
-                            
-                            qkey = str(data[6:payload_len+5].decode('ascii'))
-                            print("[DEBUG] query for ",qkey,peer_id)
                             if peer_id not in self.m_query_resp:
                                 self.m_query_resp[peer_id] = QueryResponse(address[0])
                             
                             if message_type == M_QUERY_KEY:
+                                qkey = str(data[6:payload_len+5].decode('utf-8'))
+                                print("[DEBUG] Key Query type message")
                                 query = Query(Query.QUERY_KEY,qkey)
                                 self.query_key_local(peer_id,query)
                                 self.query_key_forward(peer_id,None,query)
                             else:
+                                qkey = data[6:payload_len+5]
+                                print("[DEBUG] Hash Query type message")
                                 query = Query(Query.QUERY_ID,qkey)
                                 self.query_key_local(peer_id,query)
                                 self.query_key_forward(peer_id,self.m_peers[peer_id],query)
@@ -162,16 +170,19 @@ class SuperpeerManager:
                         else:
                             print("[ERROR] invalide message type from peer")
                     elif node_type == TYPE_SUPERPEER:
+                        print("[DEBUG] Remote type was superpeer")
                         message_type = struct.unpack('!i',data[5:6])[0]
                         peer_ip = socket.inet_ntoa(data[6:10])[0]
                         if message_type == M_QUERY_KEY or message_type == M_QUERY_ID:  
                             if message_type == M_QUERY_KEY:
-                                qkey = str(data[10:payload_len+5].decode('ascii'))
+                                print("[DEBUG] Key Query type message")
+                                qkey = str(data[10:payload_len+5].decode('utf-8'))
                                 query = Query(Query.QUERY_KEY,qkey)
                                 peer_port = None
                             else:
+                                 print("[DEBUG] Hash Query type message")
                                  peer_port = struct.unpack("!H",data[10:12])[0]
-                                 qhash = str(data[12:payload_len+5]).decode('ascii')
+                                 qhash = str(data[12:payload_len+5]).decode('utf-8')
                                  query = Query(Query.QUERY_ID,qhash)
                             if peer_ip not in self.m_query_resp:
                                 self.m_query_resp[peer_ip] = QueryResponse(address[0],None,set(address))
@@ -194,10 +205,11 @@ class SuperpeerManager:
                             if address[0] in [addr[0] for addr in self.m_neighbour_sockets.keys()]:
                                     self.m_query_resp[peer_ip].neigh_count.add(address)
                             for idx in range(file_name_count):
-                                name_len = struct.unpack("iH",data[pos:pos+2])[0]
+                                name_len = struct.unpack("!H",data[pos:pos+2])[0]
                                 pos += 2
                                 file_name = str(data[pos:pos+name_len])
                                 self.m_query_resp[peer_ip].response.add(file_name)
+                                pos += name_len
                             ##Recived response from everyone send back to originator
                             if len(self.m_query_resp[peer_ip].neigh_count) == len(self.m_neighbour_sockets):
                                 self.query_key_reply(peer_ip,message_type)
@@ -236,33 +248,38 @@ class SuperpeerManager:
                  if ip == reply_ip:
                      rsock = self.m_neighbour_sockets[(ip,port)]
          packet = struct.pack("!b",TYPE_SUPERPEER)
-         if qtype == Query.QUERY_ID:
+         if qtype == M_QUERY_ID_RESP:
+             print("[DEBUG] query hash response create")
              payload = struct.pack("!b",M_QUERY_ID_RESP)
          else:
+             print("[DEBUG] query key response create")
              payload = struct.pack("!b",M_QUERY_KEY_RESP)
          payload += socket.inet_aton(peer_id)
          payload += struct.pack("!i",len(response_set))
-         if qtype == Query.QUERY_KEY:
+         if qtype == M_QUERY_KEY_RESP:
              for file_name in response_set:
                  payload += struct.pack("!H",len(file_name))
-                 payload += bytes(file_name,'ascii')
+                 payload += bytes(file_name,'utf-8')
                  print("[DEBUG] ",file_name)
          else:
             for (ip,port) in response_set:
                 payload += socket.inet_aton(ip)
                 payload += struct.pack("!H",port)
-         packet += packet + struct.pack("!i",len(payload)) + payload
+         packet += struct.pack("!i",len(payload)) + payload
          print("[DEBUG] sent packet: ",packet)
          rsock.sendall(packet)
      def query_key_local(self,peer_id,query):
          if query.qid == Query.QUERY_ID:
+             print("[DEBUG] local searching for key")
              if query.qstring in self.m_file_ip:
                  for host_peer_ip in self.m_file_ip[query.qstring]:
                      self.m_query_resp[peer_id].response.add((host_peer_ip,self.m_peers[host_peer_ip]))
          else:
+             print("[DEBUG] local searching for hash")
              if query.qstring in self.m_key_files:
                  for file_id in self.m_key_files[query.qstring]:
                      self.m_query_resp[peer_id].response.add(self.m_hash_name_map[file_id])
+             print("[DEBUG] Local response set:",self.m_query_resp[peer_id].response)
      def query_key_forward(self,peer_id,peer_port,query):
          print("[DEBUG]",query.qstring)
          query_from = self.m_query_resp[peer_id].reply_to
@@ -273,7 +290,7 @@ class SuperpeerManager:
              #If query with identifier also port in message
              if query.qid == Query.QUERY_ID:
                          payload += struct.pack("!H",peer_port)
-             payload += bytes(query.qstring,'ascii')
+             payload += bytes(query.qstring,'utf-8')
              packet = packet + struct.pack("!i",len(payload)) + payload
              for (_,neig_sock) in self.m_neighbour_sockets.items():
                  if neig_sock.getpeername()[0] != query_from:
