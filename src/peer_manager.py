@@ -9,7 +9,7 @@ TYPE_PEER = 0
 TYPE_SUPERPEER = 1
 
 MAX_SUPERPEER_ALLOCATION = 3
-SHARED_DIRECTORY = "/home/ujjawal/Downloads"
+SHARED_DIRECTORY = "/home/sibby/Documents/shared"
 
 M_ENTRIES_UPLOAD = 0
 M_KEEP_ALIVE = 1
@@ -94,8 +94,9 @@ class PeerManager:
             try:
                 data = remote.recv(size)
                 if not len(data):
+                    print('[DEBUG] dropping empty packet')
                     remote.close()
-                return
+                    return
                 node_type = struct.unpack('!b',data[0:1])[0]
                 payload_len = struct.unpack("!i",data[1:5])[0]
                 print("[DEBUG] payload len",payload_len)
@@ -112,9 +113,9 @@ class PeerManager:
                         else:
                             bitmap_len = struct.unpack("!i", data[22:26])[0]
                             bitmap = data[26:26+bitmap_len].decode("utf-8")
-                            self.m_query_peer_to_bitmap[qstring][remote]=bitmap
-                        self.m_query_peer_set.remove(remote)
-                        if len(self.m_query_peer_set) == 0: #received from all
+                            self.m_query_peer_to_bitmap[qstring][address]=bitmap
+                        self.m_query_peer_set[qstring].remove(address)
+                        if len(self.m_query_peer_set[qstring]) == 0: #received from all
                             pass #TODO call rarest algo
                 elif node_type == TYPE_SUPERPEER:
                     print("[DEBUG] Remote type was superpeer")
@@ -150,7 +151,8 @@ class PeerManager:
     def send_query_bitmap(self, qstring, remote):
         packet = struct.pack("!b",TYPE_PEER)
         payload = struct.pack("!b",M_QUERY_BITMAP) + qstring
-        bitmap = self.find_bitmap(self, qstring)
+        bitmap = self.find_bitmap(qstring)
+        print('[DEBUG] bitmap', bitmap)
         if bitmap != '': #file present
             payload+=struct.pack("!i", len(bitmap))+ bytes(bitmap,'utf-8')
         packet = packet + struct.pack("!i",len(payload)) + payload
@@ -164,12 +166,16 @@ class PeerManager:
             ssock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
             ssock.setsockopt(socket.SOL_SOCKET,socket.SO_KEEPALIVE,1)
             ssock.connect(interface)
+            ssock.sendall(packet)
+            threading.Thread(target=self.listen_on_socket,args=(ssock,interface)).start()
             self.m_query_interface_to_socket[qstring][interface]=ssock
-            self.m_superpeer_sockets.append(ssock)
         except Exception as e:
             print("[ERROR] Peer endpoint", interface)
             print(e)
             traceback.print_exc()
+    def listen_on_socket(self, remote, address):
+        while True:
+            self.check_remote_type(remote,address)
     def add_to_peer_set(self, qstring, hosting_ip, hosting_port):
         interface = (hosting_ip, hosting_port)
         if interface not in self.m_query_peer_set[qstring] and len(self.m_query_peer_set[qstring])<MAX_PEERS:
@@ -237,12 +243,24 @@ class PeerManager:
                     blocks = math.ceil(os.stat(abs_file).st_size/BLOCK_SIZE)
                     for i in range (0, blocks):
                         bitmap+='1'
-                elif os.path.isdir(abs_file): #if block naming is 1 indexed
-                    blocks = os.listdir(pathname)
+                elif os.path.isdir(abs_file): #if block naming is 0 indexed
+                    blocks = os.listdir(abs_file)
                     for block in blocks:
-                        bitmap=bitmap.ljust(block-1, '0')
+                        if block == 'metadata.txt':
+                            continue
+                        bitmap=bitmap.ljust(int(block, 10), '0')
                         bitmap+='1'
+                    total_blocks=0
+                    with open(abs_file+"/metadata.txt",'r') as f:
+                        for line in f:
+                            if len(line) > 0:
+                                total_blocks=int(line.strip(), 10) 
+                            else:
+                                print("[ERROR] meta data not present")
+                    for i in range(len(bitmap), total_blocks):
+                        bitmap+='0'
         return bitmap
+
     def share_directory(self,pathname=SHARED_DIRECTORY):
         import os
         contents = os.listdir(pathname)
@@ -315,5 +333,11 @@ if __name__ == '__main__':
     pm.handshake()
     pm.share_directory()
     pm.start_queries()
+    '''testing
+    import hashlib
+    qstring = hashlib.md5('new_file.txt'.encode()).digest()
+    pm.m_query_interface_to_socket[qstring]={}
+    pm.m_query_peer_to_bitmap[qstring]={}
+    pm.send_query_handshake(qstring, '127.0.0.1', 7313)'''
     
         
