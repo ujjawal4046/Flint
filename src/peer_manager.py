@@ -9,7 +9,7 @@ TYPE_PEER = 0
 TYPE_SUPERPEER = 1
 
 MAX_SUPERPEER_ALLOCATION = 3
-SHARED_DIRECTORY = "/home/ujjawal/Downloads"
+SHARED_DIRECTORY = "/home/sibby/Documents/shared"
 
 M_ENTRIES_UPLOAD = 0
 M_KEEP_ALIVE = 1
@@ -18,8 +18,14 @@ M_QUERY_ID = 3
 M_HANDSHAKE = 4
 M_QUERY_KEY_RESP = 5
 M_QUERY_ID_RESP = 6
+M_QUERY_HANDSHAKE = 7
+M_QUERY_BITMAP = 8
+M_QUERY_PIECE_REQUEST = 9
+M_QUERY_PIECE_RESPONSE = 10
 
 BLOCK_SIZE = 256*1024 #size of block in bytes
+
+MAX_PEERS = 10 
 
 class Query:
     QUERY_KEY = M_QUERY_KEY
@@ -47,6 +53,9 @@ class PeerManager:
         self.m_listen_ports = None
         self.m_listen_interface = None
         self.m_query = None
+        self.m_query_peer_set = {}
+        self.m_query_interface_to_socket = {}
+        self.m_query_peer_to_bitmap = {}
         try:
                 self.m_bootstrap_socket.connect((bootstrap_addr,port))
                 print('Connected on %s %d'%(bootstrap_addr,port))
@@ -83,44 +92,96 @@ class PeerManager:
         size = 1024*1024
         while True:
             try:
-                  data = remote.recv(size)
-                  if not len(data):
+                data = remote.recv(size)
+                if not len(data):
+                    print('[DEBUG] dropping empty packet')
                     remote.close()
                     return
-                  node_type = struct.unpack('!b',data[0:1])[0]
-                  payload_len = struct.unpack("!i",data[1:5])[0]
-                  print("[DEBUG] payload len",payload_len)
-                  if node_type == TYPE_PEER:
-                          pass
-                  elif node_type == TYPE_SUPERPEER:
-                      print("[DEBUG] Remote type was superpeer")
-                      message_type = struct.unpack('!b',data[5:6])[0]
-                      my_ip = socket.inet_ntoa(data[6:10])
-                      response_len = struct.unpack("!i",data[10:14])[0]
-                      pos = 14
-                      query_choices_files = []
-                      print("[DEBUG] ",message_type,my_ip,response_len)
-                      if message_type == M_QUERY_KEY_RESP:
-                          for idx in range(response_len):
-                              name_len = struct.unpack("!H",data[pos:pos+2])[0]
-                              pos += 2
-                              file_name = str(data[pos:pos+name_len].decode('utf-8'))
-                              print("[DEBUG] got filename for query",file_name)
-                              query_choices_files.append(file_name)
-                              pos += name_len
-                          self.select_from_query_choices(query_choices_files)
-                      else:
-                          for idx in range(response_len):
-                              hosting_ip = socket.inet_ntoa(data[pos:pos+4])
-                              hosting_port = struct.unpack("!H",data[pos+4:pos+6])[0]
-                              print("[DEBUG] got peer for query",hosting_ip,hosting_port)
-                              pos += 6
-                          self.m_query = None
-                  else:
-                      pass
+                node_type = struct.unpack('!b',data[0:1])[0]
+                payload_len = struct.unpack("!i",data[1:5])[0]
+                print("[DEBUG] payload len",payload_len)
+                if node_type == TYPE_PEER:
+                    print("[DEBUG] Remote type was peer")
+                    message_type = struct.unpack('!b',data[5:6])[0]
+                    if message_type == M_QUERY_HANDSHAKE:
+                        qstring = data[6:22]
+                        self.send_query_bitmap(qstring, remote)
+                    elif message_type == M_QUERY_BITMAP:
+                        qstring = data[6:22]
+                        if payload_len == 17: #empty bitmap
+                            print("[DEBUG] Remote doesn't have file", remote)
+                        else:
+                            bitmap_len = struct.unpack("!i", data[22:26])[0]
+                            bitmap = data[26:26+bitmap_len].decode("utf-8")
+                            self.m_query_peer_to_bitmap[qstring][address]=bitmap
+                        self.m_query_peer_set[qstring].remove(address)
+                        if len(self.m_query_peer_set[qstring]) == 0: #received from all
+                            pass #TODO call rarest algo
+                elif node_type == TYPE_SUPERPEER:
+                    print("[DEBUG] Remote type was superpeer")
+                    message_type = struct.unpack('!b',data[5:6])[0]
+                    my_ip = socket.inet_ntoa(data[6:10])
+                    response_len = struct.unpack("!i",data[10:14])[0]
+                    pos = 14
+                    query_choices_files = []
+                    print("[DEBUG] ",message_type,my_ip,response_len)
+                    if message_type == M_QUERY_KEY_RESP:
+                        for idx in range(response_len):
+                            name_len = struct.unpack("!H",data[pos:pos+2])[0]
+                            pos += 2
+                            file_name = str(data[pos:pos+name_len].decode('utf-8'))
+                            print("[DEBUG] got filename for query",file_name)
+                            query_choices_files.append(file_name)
+                            pos += name_len
+                        self.select_from_query_choices(query_choices_files)
+                    elif message_type == M_QUERY_ID_RESP:
+                        for idx in range(response_len):
+                            hosting_ip = socket.inet_ntoa(data[pos:pos+4])
+                            hosting_port = struct.unpack("!H",data[pos+4:pos+6])[0]
+                            print("[DEBUG] got peer for query",hosting_ip,hosting_port)
+                            pos += 6
+                            if self.add_to_peer_set(qid, hosting_ip, hosting_port)==True:
+                                self.send_query_handshake(qstring, hosting_ip, hosting_port) #TODO add qstring in message payload
+                        self.m_query = None
+                else:
+                    pass
             except Exception as e:
                 print(e)
                 traceback.print_exc()
+    def send_query_bitmap(self, qstring, remote):
+        packet = struct.pack("!b",TYPE_PEER)
+        payload = struct.pack("!b",M_QUERY_BITMAP) + qstring
+        bitmap = self.find_bitmap(qstring)
+        print('[DEBUG] bitmap', bitmap)
+        if bitmap != '': #file present
+            payload+=struct.pack("!i", len(bitmap))+ bytes(bitmap,'utf-8')
+        packet = packet + struct.pack("!i",len(payload)) + payload
+        remote.sendall(packet)  #TODO shutdown socket?
+    def send_query_handshake(self, qstring, hosting_ip, hosting_port):
+        interface = (hosting_ip, hosting_port)
+        packet = struct.pack("!b",TYPE_PEER)
+        payload = struct.pack("!b",M_QUERY_HANDSHAKE) + qstring
+        packet = packet + struct.pack("!i",len(payload)) + payload
+        try:
+            ssock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+            ssock.setsockopt(socket.SOL_SOCKET,socket.SO_KEEPALIVE,1)
+            ssock.connect(interface)
+            ssock.sendall(packet)
+            threading.Thread(target=self.listen_on_socket,args=(ssock,interface)).start()
+            self.m_query_interface_to_socket[qstring][interface]=ssock
+        except Exception as e:
+            print("[ERROR] Peer endpoint", interface)
+            print(e)
+            traceback.print_exc()
+    def listen_on_socket(self, remote, address):
+        while True:
+            self.check_remote_type(remote,address)
+    def add_to_peer_set(self, qstring, hosting_ip, hosting_port):
+        interface = (hosting_ip, hosting_port)
+        if interface not in self.m_query_peer_set[qstring] and len(self.m_query_peer_set[qstring])<MAX_PEERS:
+            self.m_query_peer_set[qstring].add(interface)
+            return True
+        return False
     def select_from_query_choices(self,query_choices):
         if len(query_choices) > 0:
             self.m_lock.acquire()
@@ -171,6 +232,35 @@ class PeerManager:
     def close_bootstrap_connection(self):
         self.m_bootstrap_socket.shutdown(socket.SHUT_RDWR)
         self.m_bootstrap_socket.close()
+    def find_bitmap(self, qstring, pathname=SHARED_DIRECTORY):
+        import os
+        bitmap = ''
+        contents = os.listdir(pathname)
+        for file in contents:
+            if hashlib.md5(file.encode()).digest() == qstring:
+                abs_file = pathname + "/" + file 
+                if os.path.isfile(abs_file):
+                    blocks = math.ceil(os.stat(abs_file).st_size/BLOCK_SIZE)
+                    for i in range (0, blocks):
+                        bitmap+='1'
+                elif os.path.isdir(abs_file): #if block naming is 0 indexed
+                    blocks = os.listdir(abs_file)
+                    for block in blocks:
+                        if block == 'metadata.txt':
+                            continue
+                        bitmap=bitmap.ljust(int(block, 10), '0')
+                        bitmap+='1'
+                    total_blocks=0
+                    with open(abs_file+"/metadata.txt",'r') as f:
+                        for line in f:
+                            if len(line) > 0:
+                                total_blocks=int(line.strip(), 10) 
+                            else:
+                                print("[ERROR] meta data not present")
+                    for i in range(len(bitmap), total_blocks):
+                        bitmap+='0'
+        return bitmap
+
     def share_directory(self,pathname=SHARED_DIRECTORY):
         import os
         contents = os.listdir(pathname)
@@ -178,7 +268,6 @@ class PeerManager:
         for file in contents:
             abs_file = pathname + "/" + file 
             if os.path.isfile(abs_file):
-                
                 statinfo = os.stat(abs_file)
                 table.append((len(file),file,statinfo.st_size > 0,math.ceil(statinfo.st_size/BLOCK_SIZE)))
                 print('[DEBUG] ',table[-1])
@@ -224,6 +313,8 @@ class PeerManager:
               payload += bytes(query.qstring,'utf-8')
           else:
               payload += query.qstring
+              self.m_query_peer_set[query.qstring]=set()
+              self.m_query_interface_to_socket[query.qstring]={}
           packet = packet + struct.pack("!i",len(payload)) + payload
           for ssock in self.m_superpeer_sockets:
               try:
@@ -242,5 +333,11 @@ if __name__ == '__main__':
     pm.handshake()
     pm.share_directory()
     pm.start_queries()
+    '''testing
+    import hashlib
+    qstring = hashlib.md5('new_file.txt'.encode()).digest()
+    pm.m_query_interface_to_socket[qstring]={}
+    pm.m_query_peer_to_bitmap[qstring]={}
+    pm.send_query_handshake(qstring, '127.0.0.1', 7313)'''
     
         
