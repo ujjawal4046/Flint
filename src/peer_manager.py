@@ -89,6 +89,7 @@ class PeerManager:
                     return
                   node_type = struct.unpack('!b',data[0:1])[0]
                   payload_len = struct.unpack("!i",data[1:5])[0]
+                  print("[DEBUG] ",address)
                   print("[DEBUG] payload len",payload_len)
                   if node_type == TYPE_PEER:
                           pass
@@ -191,12 +192,14 @@ class PeerManager:
                 ssock = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
                 ssock.setsockopt(socket.SOL_SOCKET,socket.SO_KEEPALIVE,1)
                 ssock.connect(remote_end)
+                print("[DEBUG] connnected to superpeer",remote_end)
                 self.m_superpeer_sockets.append(ssock)
             except Exception as e:
                 print("[ERROR] Remote endpoint",remote_end)
                 print(e)
                 traceback.print_exc()
     def send_tables(self,remote_socket,table):
+          print("[DEBUG] sending tables to",remote_socket.getsockname())
           packet = struct.pack("!b",TYPE_PEER)
           payload = struct.pack("!b",M_ENTRIES_UPLOAD) + struct.pack("!i",len(table))
           for (lname,name,is_down,block_count) in table:
@@ -228,6 +231,7 @@ class PeerManager:
           for ssock in self.m_superpeer_sockets:
               try:
                   ssock.sendall(packet)
+                  print("[DEBUG] query sent to",ssock.getpeername())
                   break
               except Exception as e:
                   print(e)
@@ -235,7 +239,10 @@ class PeerManager:
     
           
 if __name__ == '__main__':
-    pm = PeerManager('',6889)
+    interface = ""
+    if len(sys.argv) > 1:
+        interface = sys.argv[1]
+    pm = PeerManager(interface,6889)
     pm.get_superpeers()
     pm.listen_on(range(7312,7355),"")
     pm.establish_superpeer_connections()

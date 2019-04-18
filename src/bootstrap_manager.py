@@ -88,7 +88,7 @@ class BootstrapManager:
                 
     def write_neighbour_allocation(self,data,remote,address):
         remote_listen_port = struct.unpack("!H",data)[0]
-        
+        print("[DEBUG] Got a superpeer",address[0],remote_listen_port)
         self.m_superpeers[address[0]] = SuperpeerEntry(remote_listen_port,0,time.time())
         
         #Allocate neighbours based on latest keep alive
