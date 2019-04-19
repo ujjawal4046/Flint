@@ -1,8 +1,6 @@
-import socketserver
 import socket
 import threading
 import struct 
-import sys
 import traceback
 import time
 import math
@@ -10,7 +8,7 @@ TYPE_BOOTSTRAP = 2
 TYPE_PEER = 0
 TYPE_SUPERPEER = 1
 MAX_SUPERPEER_ALLOCATION = 3
-SUPERPEER_DATAFILE = 'superlist.txt'
+SUPERPEER_DATAFILE = 'superpeer_list.txt'
 PERCENT_NEIGHBOUR = 0.2
 KEEP_ALIVE_EXPIRE_SECONDS = 600
 
@@ -60,7 +58,7 @@ class BootstrapManager:
             self.m_lock = threading.Lock()
             threading.Thread(target=self.check_remote_type,args=(remote,address)).start()
     def check_remote_type(self,remote,address):
-        size = 16
+        size = 1024
         while True:
             try:
                 data = remote.recv(size)
@@ -72,6 +70,11 @@ class BootstrapManager:
                 
                 node_type = struct.unpack('!b',data[0:1])[0]
                 payload_len = struct.unpack('!i',data[1:5])[0]
+                to_be_recvd = payload_len - len(data) + 5
+                while to_be_recvd>0:
+                    	x = remote.recv(to_be_recvd)
+                    	to_be_recvd-=len(x)
+                    	data+=x
                 if node_type == TYPE_PEER:
                     self.write_superpeer_allocation(remote)
                 elif node_type == TYPE_SUPERPEER:

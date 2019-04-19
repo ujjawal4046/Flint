@@ -139,6 +139,11 @@ class SuperpeerManager:
                 while len(data) > 0:
                     node_type = struct.unpack('!b',data[0:1])[0]
                     payload_len = struct.unpack("!i",data[1:5])[0]
+                    to_be_recvd = payload_len - len(data) + 5
+                    while to_be_recvd>0:
+                    	x = remote.recv(to_be_recvd)
+                    	to_be_recvd-=len(x)
+                    	data+=x
                     if node_type == TYPE_PEER:
                         print("[DEBUG] Remote type was peer")
                         message_type = struct.unpack('!b',data[5:6])[0]
@@ -247,7 +252,7 @@ class SuperpeerManager:
              except Exception as e:
                 print(e)
                 traceback.print_exc()
-     def query_key_reply(self,peer_id,qtype):
+     def query_key_reply(self,peer_id,qtype,qstring=None):
          reply_ip = self.m_query_resp[peer_id].reply_to
          response_set = self.m_query_resp[peer_id].response
          self.m_query_resp.pop(peer_id)
@@ -274,13 +279,17 @@ class SuperpeerManager:
              print("[DEBUG] query key response create")
              payload = struct.pack("!b",M_QUERY_KEY_RESP)
          payload += socket.inet_aton(peer_id)
-         payload += struct.pack("!i",len(response_set))
+         
+         
          if qtype == M_QUERY_KEY_RESP:
+             payload += struct.pack("!i",len(response_set))
              for file_name in response_set:
                  payload += struct.pack("!H",len(file_name))
                  payload += bytes(file_name,'utf-8')
                  print("[DEBUG] ",file_name)
          else:
+            payload += qstring
+            payload += struct.pack("!i",len(response_set))
             for (ip,port) in response_set:
                 payload += socket.inet_aton(ip)
                 payload += struct.pack("!H",port)
@@ -328,9 +337,10 @@ class SuperpeerManager:
          if len(self.m_query_resp[peer_id].neigh_count) == len(self.m_neighbour_sockets) or query.qid == Query.QUERY_ID:
              if query.qid == Query.QUERY_ID:
                  resp_type = M_QUERY_ID_RESP
+                 self.query_key_reply(peer_id,resp_type,query.qstring)
              else:
                  resp_type = M_QUERY_KEY_RESP
-             self.query_key_reply(peer_id,resp_type)
+                 self.query_key_reply(peer_id,resp_type)
      def send_keep_alive(self):
         packet = struct.pack("!b",TYPE_SUPERPEER)
         payload = struct.pack("!H",len(self.m_ip_list))
